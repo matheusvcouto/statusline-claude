@@ -7,7 +7,7 @@ próprio** — script, docs, testes e backups juntos; o histórico de edições 
 command.sh    ← o script ativo (settings.json global e dos perfis apontam pra cá)
 CLAUDE.md     ← regras e invariantes para agentes que forem editar
 ADR.md        ← registros de decisão (revisões 8–11) e post-mortems
-tests/run.sh  ← harness hermético (31 checagens); rodar após QUALQUER edição
+tests/run.sh  ← harness hermético (44 checagens); rodar após QUALQUER edição
 backups/      ← snapshots pontuais pré-mudança (o git é o histórico principal)
 ```
 
@@ -55,7 +55,8 @@ faz chamada de rede (os dirs de teste não têm credencial). Cobre: crescimento,
 descendo (aumento de limite), recência ativa×ociosa, rollover (stdin e API), cache
 corrompido (dos dois caches), ISO-8601, isolamento entre contas, janela expirada `(0m)`,
 poda TTL, schemas legados, sem `session_id`, sem `rate_limits`, API×sessão (fresca e
-velha), indicador `↻`, `ctx:0%`.
+velha), indicador `↻`, `ctx:0%`, tolerância de `resets_at` entre fontes (API ±1s vs.
+cache e `resets_at` nulo em janela de uso 0).
 
 ## FAQ — perguntas já respondidas (com prova nos testes)
 

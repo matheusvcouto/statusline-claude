@@ -199,6 +199,36 @@ check "S 5h bar from api" "$out" '5h\[[^]]*\]55% \(1h5[78]m\)'
 check "S 7d bar from api" "$out" '7d\[[^]]*\]16%'
 check "S freshness shown" "$out" '↻[0-9]+s'
 
+# --- V: API reset 1s BELOW cache (rounding) still wins over idle session ------
+# Old bug: $sr >= $br dropped the -1s reading, so the idle 20% stuck and ↻ grew.
+c=$(newcfg V)
+printf '%s' '{"five":{"resets_at":"'"$R1"'","sessions":{"s1":{"pct":20,"at":'$(( now - 4000 ))',"seen":'$(( now - 10 ))'}}},"week":{"resets_at":"'"$R2"'","sessions":{"s1":{"pct":10,"at":'$(( now - 4000 ))',"seen":'$(( now - 10 ))'}}}}' > "$c/rate-limit-cache.json"
+printf '%s' '{"five":{"pct":55,"resets_at":'$(( R1 - 1 ))'},"week":{"pct":16,"resets_at":'$(( R2 - 1 ))'},"fetched_at":'$(( now - 30 ))'}' > "$c/usage-api-cache.json"
+out=$(render "$c" "$(stdin_json s1 20 "$R1" 10 "$R2")")
+check "V api 55 beats idle despite -1s reset" "$out" '5h\[[^]]*\]55%'
+check "V api weekly 16 despite -1s reset" "$out" '7d\[[^]]*\]16%'
+check "V freshness refreshed by api" "$out" '↻[0-9]+s '
+
+# --- W: API reset 1s ABOVE cache does NOT false-rollover / wipe live sessions -
+# Old bug: $sr > $cr saw a "new window" and cleared s1/s2, then locked them out.
+c=$(newcfg W)
+printf '%s' '{"five":{"resets_at":"'"$R1"'","sessions":{"s1":{"pct":40,"at":'$(( now - 10 ))',"seen":'$(( now - 5 ))'},"s2":{"pct":42,"at":'$(( now - 20 ))',"seen":'$(( now - 5 ))'}}},"week":{"resets_at":"'"$R2"'","sessions":{"s1":{"pct":10,"at":'$(( now - 10 ))',"seen":'$(( now - 5 ))'}}}}' > "$c/rate-limit-cache.json"
+printf '%s' '{"five":{"pct":3,"resets_at":'$(( R1 + 1 ))'},"week":{"pct":16,"resets_at":'$(( R2 + 1 ))'},"fetched_at":'$(( now - 30 ))'}' > "$c/usage-api-cache.json"
+render "$c" "$(stdin_json s1 40 "$R1" 10 "$R2")" >/dev/null
+check "W live session s1 survives +1s api" "$(jq -c '.five.sessions | keys' "$c/rate-limit-cache.json")" 's1'
+check "W live session s2 survives +1s api" "$(jq -c '.five.sessions | keys' "$c/rate-limit-cache.json")" 's2'
+check "W resets_at not bumped by +1s" "$(jq -r '.five.resets_at' "$c/rate-limit-cache.json")" "^$R1\$"
+
+# --- X: API resets_at=null (0-usage window) still records under current window -
+# Old bug: the null guard dropped a fresh 0% reading; idle stale pct stuck, ↻ grew.
+c=$(newcfg X)
+printf '%s' '{"five":{"resets_at":"'"$R1"'","sessions":{"s1":{"pct":19,"at":'$(( now - 4000 ))',"seen":'$(( now - 10 ))'}}},"week":{"resets_at":"'"$R2"'","sessions":{"s1":{"pct":10,"at":'$(( now - 4000 ))',"seen":'$(( now - 10 ))'}}}}' > "$c/rate-limit-cache.json"
+printf '%s' '{"five":{"pct":0,"resets_at":null},"week":{"pct":16,"resets_at":'"$R2"'},"fetched_at":'$(( now - 30 ))'}' > "$c/usage-api-cache.json"
+out=$(render "$c" "$(stdin_json s1 19 "$R1" 10 "$R2")")
+check "X api 0% (null reset) beats idle 19%" "$out" '5h\[[^]]*\]0% \(1h5[78]m\)'
+check "X freshness refreshed by null-reset api" "$out" '↻[0-9]+s '
+check "X __api__ recorded in five window" "$(jq -c '.five.sessions | keys' "$c/rate-limit-cache.json")" '__api__'
+
 echo
 echo "== $PASS passed, $FAIL failed =="
 # give stray background fetchers a moment, then clean up

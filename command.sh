@@ -162,6 +162,15 @@ if ! printf '%s' "$cache_raw" | jq -e 'type=="object"' >/dev/null 2>&1; then
   cache_raw='{}'
 fi
 
+# Two sources report resets_at for the SAME window but round the instant
+# differently (stdin rounds; the API's iso2ep truncates the fraction), so they
+# can disagree by ~1s. With strict >/>= a -1s API reading looked like an OLD
+# window and was dropped (freshness froze, ↻ grew unbounded when idle); a +1s
+# reading looked like a NEW window and triggered a false rollover that wiped
+# live sessions. A tolerance band, far below the smallest real window
+# (5h = 18000s), absorbs the rounding without ever masking a genuine rollover.
+RESETS_SLACK=120
+
 # One filter, applied twice: once for this session's stdin snapshot, once for
 # the API fetch as pseudo-session "__api__" (timestamped by WHEN IT WAS FETCHED,
 # not now, so a stale API cache never outranks a live session). Same filter =
@@ -172,17 +181,22 @@ merge_filter='
   def merge($w; $pct; $reset):
       ($w // {}) as $w
     | tonum($reset) as $sr | tonum($w.resets_at) as $cr
-    # Rollover: a strictly newer window clears the per-session map so old
-    # sessions cannot leak their pct across the reset boundary.
-    | (if ($sr != null) and (($cr == null) or ($sr > $cr))
+    # Rollover: a MEANINGFULLY newer window (beyond the cross-source rounding
+    # slack) clears the per-session map so old sessions cannot leak their pct
+    # across the reset boundary. The +$slack guard stops a +1s API reading from
+    # faking a rollover and wiping live stdin sessions.
+    | (if ($sr != null) and (($cr == null) or ($sr > ($cr + $slack)))
          then {resets_at: $reset, sessions: {}}
          else {resets_at: $w.resets_at, sessions: ($w.sessions // {})}
        end) as $base
     | tonum($pct) as $p | tonum($base.resets_at) as $br
-    # Record this session only when it reports the current window. Stamp "at"
-    # only when the pct actually changed: an unchanged pct keeps its old stamp,
-    # which is what lets idle terminals age out and never win.
-    | (if ($p != null) and ($sr != null) and ($br != null) and ($sr >= $br)
+    # Record this session only when it reports the current window. The -$slack
+    # tolerance keeps a -1s API reading from being mistaken for an old window.
+    # A null resets_at with a real pct (the API sends resets_at=null for a
+    # 0-usage window) is treated as the CURRENT window so that fresh reading can
+    # still display and refresh ↻. Stamp "at" only when the pct actually changed:
+    # an unchanged pct keeps its old stamp, which lets idle terminals age out.
+    | (if ($p != null) and ($br != null) and (($sr == null) or ($sr >= ($br - $slack)))
          then ($base.sessions[$sid] // null) as $prev
            | $base.sessions + {($sid): {
                pct: $p,
@@ -198,6 +212,7 @@ merged=$(printf '%s' "$cache_raw" | jq \
   --arg sid "$session_id" \
   --argjson now "$now_epoch" \
   --argjson ttl "$TTL_SECS" \
+  --argjson slack "$RESETS_SLACK" \
   --arg fp "$five_pct" --arg fr "$five_reset" \
   --arg wp "$week_pct" --arg wr "$week_reset" "$merge_filter" 2>/dev/null)
 
@@ -206,6 +221,7 @@ if [ -n "$merged" ] && { [ -n "$api_fp" ] || [ -n "$api_wp" ]; }; then
     --arg sid "__api__" \
     --argjson now "$api_at" \
     --argjson ttl "$TTL_SECS" \
+    --argjson slack "$RESETS_SLACK" \
     --arg fp "$api_fp" --arg fr "$api_fr" \
     --arg wp "$api_wp" --arg wr "$api_wr" "$merge_filter" 2>/dev/null)
   [ -n "$api_merged" ] && merged="$api_merged"

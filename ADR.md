@@ -156,6 +156,62 @@ Testes novos no harness: T (sessão ativa ⇒ 0 chamadas, via shim de `curl` que
 invocações) e U (ociosa ⇒ exatamente 1 chamada, resultado exibido no render seguinte,
 sem re-chamada dentro do TTL). Total: 35 checagens.
 
+## Revisão 13 — tolerância no `resets_at` entre fontes (↻ travando) (2026-07-03)
+
+**Sintoma**: com o terminal aberto mas ocioso, o `↻` crescia sem parar (`5m→7m→16m…`)
+e o número exibido ficava velho, mesmo com o fetch da API rodando. Um relatório de
+investigação (por um agente) apontou um "off-by-one de −1s sistemático". Investigação
+crítica posterior mostrou que a explicação era parcial: o −1s é **intermitente**, não
+determinístico, e havia **duas** causas adicionais não vistas.
+
+**Causa raiz (uma só, três manifestações)**: `resets_at` é usado como chave de
+comparação (`>` no rollover, `>=` no gate de gravação) entre **duas fontes que
+arredondam o instante de reset diferente** — o stdin arredonda, o `iso2ep` (fetcher)
+**trunca** a fração de segundo. Isso produz divergências de ~1s que quebravam a lógica
+nas duas direções, além de um caso de `null`:
+
+1. **API `resets_at` = cache − 1** → o gate `$sr >= $br` tratava a leitura fresca como
+   "janela velha" e a **descartava**. Em ociosidade, a API (que existe justamente para
+   vencer a sessão parada, revisão 10) nunca entrava; `__api__.seen` congelava e o `↻`
+   crescia sem teto.
+2. **API `resets_at` = cache + 1** → o rollover `$sr > $cr` via "janela nova", **zerava
+   o mapa de sessões** (apagava sessões vivas) e ainda travava as sessões de stdin fora
+   do cache no tick seguinte (o resets antigo delas virava < cache). Candidato ao
+   "flapping". *Este caso o relatório anterior não viu — é o mais grave.*
+3. **Uso 5h = 0 → a API devolve `resets_at: null`** → o gate `$sr != null` derrubava a
+   leitura fresca de 0% daquela janela (estado real observado no cache no dia).
+
+**Correção — banda de tolerância `RESETS_SLACK=120` (bidirecional) + caso `null`**:
+- Rollover só dispara com `$sr > $cr + $slack` (um +1s não fantasia rollover).
+- Gate grava com `$sr >= $br - $slack` (um −1s não vira janela velha).
+- `resets_at` nulo com `pct` real é tratado como **janela atual** (grava sob o
+  `resets_at` já conhecido), para a leitura fresca poder exibir e refrescar o `↻`.
+- 120s fica **muito** abaixo da menor janela real (5h = 18.000s), então nunca mascara um
+  rollover verdadeiro (que salta horas/dias). Nenhum invariante muda: "maior % vence"
+  continua morto, janela expirada continua em `(0m)`, poda continua por `seen`, `__api__`
+  continua carimbado com `fetched_at`.
+
+**Efeito**: em ociosidade a leitura da API volta a vencer a sessão parada, o `↻` reseta
+a cada fetch bem-sucedido (teto ≈ `API_TTL`, ~5min) e o número exibido reflete a verdade
+do `/usage` — a meta original da revisão 10 volta a valer nas três situações.
+
+**Testes novos (V/W/X)**: −1s vence idle; +1s **não** apaga sessões vivas nem buga o
+`resets_at`; `resets_at` nulo com pct grava e exibe. Verificado que os 3 **falham** no
+`command.sh` pré-fix e passam no corrigido (regression guards de verdade). Total: 44
+checagens. Gap anterior: nenhum cenário fazia o `resets_at` do cache divergir do da API
+(M/N/O/P/S usavam o mesmo inteiro dos dois lados; T/U usavam ISO redondo).
+
+**Decidido NÃO mexer** (comportamento desejado / fiel, não bug):
+- **`105%`** vem pronto do stdin (`used_percentage`); é dado fiel de overage da Anthropic.
+  Clampar em 100% esconderia estado real — mesma filosofia do `(0m)`. A barra já satura em
+  10 blocos; o número segue honesto.
+- **Sem lock no `CACHE_FILE`**: race de lost-update benigna, já documentada como aceita
+  (`mv` atômico + re-report a cada 3s). Só revisitar se sobrar flapping depois desta
+  revisão.
+- **`↻` crescer com terminal vivo-mas-ocioso sem fetch**: por design — re-reportar o
+  mesmo snapshot não é confirmação nova. Depois desta revisão o fetch volta a confirmar
+  de verdade em ociosidade.
+
 ## Post-mortem — push ao GitHub antes da sanitização (2026-07-02)
 
 O repo foi publicado (privado) no GitHub **antes** da limpeza de dados pessoais: os
