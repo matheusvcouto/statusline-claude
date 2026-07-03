@@ -1,0 +1,184 @@
+#!/bin/bash
+# Claude Code status line - "Completo"
+# Shows: account name | directory | git branch | model |
+#        5h rate-limit bar + time-to-reset |
+#        7d rate-limit bar + time-to-reset | context remaining
+
+input=$(cat)
+
+model=$(echo "$input" | jq -r '.model.display_name')
+dir=$(echo "$input" | jq -r '.workspace.current_dir')
+dir_name=$(basename "$dir")
+effort=$(echo "$input" | jq -r '.effort.level // empty')
+
+# Git branch (skip optional locks to avoid contention)
+branch=""
+if git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  branch=$(git -C "$dir" --no-optional-locks branch --show-current 2>/dev/null)
+fi
+
+# Claude account display name (not exposed via stdin; read directly from
+# the global config file)
+account_name=$(jq -r '.oauthAccount.displayName // empty' "${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json" 2>/dev/null)
+
+# Context remaining percentage
+remaining=$(echo "$input" | jq -r '.context_window.remaining_percentage // empty')
+
+# 5-hour rate limit window
+five_pct=$(echo "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty')
+five_reset=$(echo "$input" | jq -r '.rate_limits.five_hour.resets_at // empty')
+
+# Build a human-readable "Xd Yh Zm restantes" countdown to reset
+fmt_remaining_time() {
+  local reset_epoch="$1"
+  [ -z "$reset_epoch" ] && return
+  local now secs_left d h m
+  now=$(date +%s)
+  secs_left=$(( ${reset_epoch%.*} - now ))
+  [ "$secs_left" -lt 0 ] && secs_left=0
+  d=$(( secs_left / 86400 ))
+  h=$(( (secs_left % 86400) / 3600 ))
+  m=$(( (secs_left % 3600) / 60 ))
+  if [ "$d" -gt 0 ]; then
+    printf "%dd%dh restantes" "$d" "$h"
+  elif [ "$h" -gt 0 ]; then
+    printf "%dh%dm restantes" "$h" "$m"
+  else
+    printf "%dm restantes" "$m"
+  fi
+}
+# 7-day (weekly) rate limit window
+week_pct=$(echo "$input" | jq -r '.rate_limits.seven_day.used_percentage // empty')
+week_reset=$(echo "$input" | jq -r '.rate_limits.seven_day.resets_at // empty')
+# Countdowns are computed *after* the shared-cache merge below, so they reflect
+# the converged window rather than this session's possibly-stale snapshot.
+
+# --- Shared rate-limit cache --------------------------------------------------
+# Each Claude Code session only knows the rate-limit snapshot it last received,
+# so idle terminals show stale (lower) percentages than active ones. The real
+# account usage is the *highest* value seen for the current window (usage only
+# grows until reset). We persist that max into a shared cache so every terminal
+# converges to the up-to-date value, regardless of which session is active.
+CACHE_FILE="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/rate-limit-cache.json"
+# The merged JSON ({five:{resets_at,pct}, week:{...}}) is both what we display
+# and what we persist back, so a single jq pass produces everything.
+merged=$(jq -n \
+  --slurpfile cache <(cat "$CACHE_FILE" 2>/dev/null) \
+  --arg fp "$five_pct" --arg fr "$five_reset" \
+  --arg wp "$week_pct" --arg wr "$week_reset" '
+  # Parse a reset key as a number (epoch); "" / missing -> null.
+  def rnum($r): if (($r // "") == "") then null else ($r | tonumber) end;
+  # Merge one window. Compares reset epochs so a stale terminal reporting an
+  # OLD window can never clobber a newer cached window:
+  #   - no fresh pct        -> keep cache
+  #   - newer/unknown window -> take fresh (window rolled over)
+  #   - older window report  -> keep cache (ignore stale session)
+  #   - same window          -> keep the max (usage only grows until reset)
+  def merge($w; $pct; $reset):
+      (if $pct == "" then null else ($pct | tonumber) end) as $p
+    | if $p == null then ($w // null)
+      else rnum($reset) as $sr | rnum($w.resets_at) as $cr
+      | if ($cr == null) or ($sr == null) or ($sr > $cr)
+          then {resets_at: $reset, pct: $p}
+        elif ($sr < $cr) then $w
+        else {resets_at: $reset, pct: (if (($w.pct // -1) > $p) then $w.pct else $p end)}
+        end
+      end;
+  ($cache[0] // {}) as $c
+  | {five: merge($c.five; $fp; $fr), week: merge($c.week; $wp; $wr)}' 2>/dev/null)
+
+if [ -n "$merged" ]; then
+  # Override displayed values with the converged window (one jq pass, @tsv).
+  IFS=$'\t' read -r five_pct five_reset week_pct week_reset < <(
+    printf '%s' "$merged" | jq -r '[.five.pct, .five.resets_at, .week.pct, .week.resets_at] | @tsv')
+  # Persist atomically (mv is atomic on the same filesystem) to stay safe across
+  # concurrent terminals; benign races self-heal since values are monotonic.
+  tmp="$CACHE_FILE.tmp.$$"
+  if printf '%s' "$merged" >"$tmp" 2>/dev/null; then
+    mv -f "$tmp" "$CACHE_FILE" 2>/dev/null || rm -f "$tmp"
+  fi
+fi
+
+five_time_left=$(fmt_remaining_time "$five_reset")
+week_time_left=$(fmt_remaining_time "$week_reset")
+# -----------------------------------------------------------------------------
+
+# Build a small 10-segment progress bar for the 5h usage percentage
+fmt_bar() {
+  local pct="$1"
+  [ -z "$pct" ] && return
+  awk -v p="$pct" 'BEGIN {
+    total = 10
+    filled = int((p / 100) * total + 0.5)
+    if (filled > total) filled = total
+    if (filled < 0) filled = 0
+    bar = ""
+    for (i = 0; i < filled; i++) bar = bar "#"
+    for (i = filled; i < total; i++) bar = bar "-"
+    printf "%s", bar
+  }'
+}
+five_bar=$(fmt_bar "$five_pct")
+week_bar=$(fmt_bar "$week_pct")
+
+# Colors (dim variants, suitable for terminal status lines)
+DIM_CYAN='\033[2;36m'
+DIM_GREEN='\033[2;32m'
+DIM_YELLOW='\033[2;33m'
+DIM_GRAY='\033[2;37m'
+DIM_RED='\033[2;31m'
+DIM_WHITE='\033[2;97m'
+RESET='\033[0m'
+
+sep() { printf "${DIM_GRAY}|${RESET}"; }
+
+output=""
+
+if [ -n "$account_name" ]; then
+  output="$(printf "${DIM_WHITE}%s${RESET}" "$account_name")"
+  output="$output $(sep)"
+  output="$output $(printf "${DIM_CYAN}%s${RESET}" "$model")"
+  if [ -n "$effort" ]; then
+    output="$output $(printf "${DIM_GRAY}-${RESET}")"
+    output="$output $(printf "${DIM_CYAN}%s${RESET}" "$effort")"
+  fi
+fi
+
+if [ -n "$output" ]; then
+  output="$output $(sep)"
+  output="$output $(printf "${DIM_GREEN}%s${RESET}" "$dir_name")"
+else
+  output="$(printf "${DIM_GREEN}%s${RESET}" "$dir_name")"
+fi
+
+if [ -n "$branch" ]; then
+  output="$output $(sep)"
+  output="$output $(printf "${DIM_YELLOW}%s${RESET}" "$branch")"
+fi
+
+if [ -n "$five_pct" ]; then
+  output="$output $(sep)"
+  output="$output $(printf "${DIM_GRAY}5h[${RESET}")"
+  output="$output $(printf "${DIM_YELLOW}%s${RESET}" "$five_bar")"
+  output="$output $(printf "${DIM_GRAY}]%s%%${RESET}" "$(printf '%.0f' "$five_pct")")"
+  if [ -n "$five_time_left" ]; then
+    output="$output $(printf "${DIM_GRAY}(%s)${RESET}" "$five_time_left")"
+  fi
+fi
+
+if [ -n "$week_pct" ]; then
+  output="$output $(sep)"
+  output="$output $(printf "${DIM_GRAY}7d[${RESET}")"
+  output="$output $(printf "${DIM_RED}%s${RESET}" "$week_bar")"
+  output="$output $(printf "${DIM_GRAY}]%s%%${RESET}" "$(printf '%.0f' "$week_pct")")"
+  if [ -n "$week_time_left" ]; then
+    output="$output $(printf "${DIM_GRAY}(%s)${RESET}" "$week_time_left")"
+  fi
+fi
+
+if [ -n "$remaining" ]; then
+  output="$output $(sep)"
+  output="$output $(printf "${DIM_GRAY}ctx:%s%%${RESET}" "$(printf '%.0f' "$remaining")")"
+fi
+
+printf "%s" "$output"
