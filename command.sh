@@ -1,8 +1,12 @@
 #!/bin/bash
 # Claude Code status line - "Completo"
-# Shows: account name | directory | git branch | model |
-#        5h rate-limit bar + time-to-reset |
-#        7d rate-limit bar + time-to-reset | context remaining
+# Layout (keep this comment AND the README example in sync with any display change):
+#   account | model - effort | dir | git-branch |
+#   5h[bar]pct%(reset-countdown) - 7d[bar]pct%(reset-countdown) - ↻freshness | ctx:pct%
+# Example:
+#   USER_NAME | Fable 5 - high | my-project | main | 5h[ ######---- ]59% (4h12m) - 7d[ ##-------- ]21% (32m) - ↻4s | ctx:78%
+# Optional segments (account, effort, branch, bars, ↻, ctx) are simply omitted
+# when their data is missing; separators collapse accordingly.
 
 input=$(cat)
 

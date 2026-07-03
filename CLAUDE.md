@@ -13,6 +13,9 @@ toda mudança deve virar commit aqui.
 - **Rodar `tests/run.sh` depois de qualquer edição** — todos os cenários devem passar.
   Cenário novo de bug corrigido entra no harness junto com a correção.
 - Registrar decisões e post-mortems no `ADR.md`, e commitar script + docs juntos.
+- **Qualquer mudança de exibição atualiza JUNTO, no mesmo commit**: o comentário de
+  layout no topo do `command.sh` (com o exemplo) e a linha de exemplo do `README.md`.
+  Comentário de layout desatualizado é bug.
 - Sem output em maiúsculas forçadas.
 - Backup pontual antes de mudança grande: cópia em `backups/` (além do git).
 - **Nenhum dado pessoal em docs, testes ou commits deste repo**: nada de nome real de
