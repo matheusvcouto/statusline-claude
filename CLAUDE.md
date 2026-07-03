@@ -12,6 +12,15 @@ toda mudança deve virar commit aqui.
   comportamento sem ficar óbvio no diff. Regra vem de feedback explícito do usuário.
 - **Rodar `tests/run.sh` depois de qualquer edição** — todos os cenários devem passar.
   Cenário novo de bug corrigido entra no harness junto com a correção.
+- **Testes novos seguem as regras de hermeticidade do harness**: cada cenário usa seu
+  próprio `CLAUDE_CONFIG_DIR` temporário (nunca o real); zero rede — comportamento de
+  fetch se testa com o shim de `curl` no `PATH` + `.credentials.json` falso (ver
+  cenários T/U); countdowns esperados usam offsets com ~30s de folga (`R1=now+7110` →
+  aceitar `1h5[78]m`) para não flakar com a passagem de segundos; regex de segmento
+  nunca usa `.*` (cruza separadores — usar classes limitadas como `\[[^]]*\]`).
+- **Antes de qualquer push**: auditar dados pessoais —
+  `grep -rniE '<nome>|<conta>|/Users/' --exclude-dir=.git .` e
+  `git log --format='%an <%ae>'` (ver post-mortem do push no ADR.md).
 - Registrar decisões e post-mortems no `ADR.md`, e commitar script + docs juntos.
 - **Qualquer mudança de exibição atualiza JUNTO, no mesmo commit**: o comentário de
   layout no topo do `command.sh` (com o exemplo) e a linha de exemplo do `README.md`.

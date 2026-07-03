@@ -155,3 +155,28 @@ GET/dia no pior caso) não causava problema — a mudança é higiene/economia, 
 Testes novos no harness: T (sessão ativa ⇒ 0 chamadas, via shim de `curl` que conta
 invocações) e U (ociosa ⇒ exatamente 1 chamada, resultado exibido no render seguinte,
 sem re-chamada dentro do TTL). Total: 35 checagens.
+
+## Post-mortem — push ao GitHub antes da sanitização (2026-07-02)
+
+O repo foi publicado (privado) no GitHub **antes** da limpeza de dados pessoais: os
+commits originais subiram com nome real de autor e exemplos com nome de conta/caminhos
+`/Users/<usuário>`. A sanitização local foi feita re-iniciando o `.git` (identidade
+neutra + arquivos limpos) e um `push --force` substituiu o `main` remoto. Lições:
+
+1. **Sanitizar ANTES do primeiro push.** Auditoria mínima:
+   `grep -rniE '<nome>|<conta>|/Users/' --exclude-dir=.git .` + conferir
+   `git log --format='%an <%ae>'`.
+2. **`rm -rf .git` apaga junto a config do remote** — por isso o `origin` "sumiu"
+   depois da re-inicialização; foi preciso `git remote add` de novo.
+3. **`push --force` não apaga os commits antigos do servidor**: eles ficam órfãos mas
+   acessíveis por hash direto até o garbage collection do GitHub. Aceito porque o repo
+   é privado; **se um dia for público, apagar e recriar o repo antes** (tudo existe
+   local).
+
+## Alternativa considerada — janela semanal por modelo (não exibida)
+
+A resposta de `/api/oauth/usage` também traz limites semanais **por modelo** em
+`limits[]` (`kind: "weekly_scoped"`, ex.: só Fable), além do `seven_day` geral.
+Decisão: **não exibir** — a linha já é longa e o semanal geral é o que aciona o limite
+na prática. Se um dia for adicionado, entra no mesmo merge como janela nova (mesmo
+filtro), não como lógica paralela.
