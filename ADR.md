@@ -226,6 +226,28 @@ dos modelos); mesmo os 60s da revisão 10 (~1.440 GET/dia no pior caso) eram ace
 até ~10min antes do próximo fetch (era ~5min). Enviar qualquer mensagem continua zerando
 na hora. `API_TTL` segue sendo o knob único no topo do bloco de fetch.
 
+**Duas preocupações do usuário, avaliadas e descartadas:**
+
+1. **"Pode dar problema de rate limit?"** Não. `/api/oauth/usage` é endpoint de
+   **metadados** — a mesma chamada que o app faz ao abrir `/usage`. Não passa pelo rate
+   limit dos modelos nem consome nada do plano.
+2. **"Podem achar estranho a cada 5/10min?"** Não é volume que chame atenção. Com o lock
+   por conta são no máximo **1 chamada por `API_TTL` por conta**, e **só em ociosidade**
+   (uso ativo = 0 chamadas). Pior caso realista (um terminal aberto ocioso 24h):
+
+   | `API_TTL` | pior caso ocioso |
+   |-----------|------------------|
+   | 60s (rev 10) | ~1.440 GET/dia — já era aceito |
+   | 300s (rev 12) | ~288 GET/dia |
+   | **600s (esta rev)** | **~144 GET/dia** |
+
+   O próprio app gera tráfego equivalente ao abrir `/usage` algumas vezes. 144
+   requests/dia de metadado é ruído — não há sinal de que seja suspeito ou penalizado.
+
+**Recomendação registrada**: 600s (10min) é o ponto certo entre economia e frescor para
+o uso do usuário; 300s também era seguro. Ambos sem risco. Reduzir mais (ex.: 120s) só se
+o cenário "voltar e só olhar" incomodar — o custo segue baixo (endpoint grátis).
+
 Teste U ajustado: o `at` de ociosidade passou de `now-400` para `now-700` (precisa ser
 maior que o novo `API_TTL` para o cenário "ocioso ⇒ 1 chamada" continuar válido). 44
 checagens seguem verdes.
