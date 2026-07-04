@@ -97,7 +97,7 @@ API_CACHE="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/usage-api-cache.json"
 # stdin (a pct change counts as server contact) nor a previous fetch. So
 # active use costs ZERO API calls; the API only covers idleness and usage
 # made on other devices. The decision itself happens AFTER the merge below.
-API_TTL=300
+API_TTL=600
 
 spawn_usage_fetch() {
   (

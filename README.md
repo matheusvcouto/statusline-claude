@@ -28,7 +28,7 @@ As barras de rate-limit (5h/7d) combinam **duas fontes**, decididas por recênci
    cache em `$CLAUDE_CONFIG_DIR/usage-api-cache.json`, competindo no merge como
    pseudo-sessão `__api__`. Só dispara em **inatividade real**: se qualquer sessão
    confirmou dado novo via stdin há menos de `API_TTL` (constante única no script,
-   padrão 300s), nenhuma chamada é feita — uso ativo custa zero chamadas; ocioso é
+   padrão 600s), nenhuma chamada é feita — uso ativo custa zero chamadas; ocioso é
    1 chamada a cada `API_TTL` por conta (lock anti-stampede entre terminais).
 
 O `↻` mostra há quanto tempo os números exibidos foram confirmados com o servidor.
@@ -83,7 +83,7 @@ o `↻` volta a `0s` em todos. Isso também fecha o portão da API (a confirmaç
 stdin conta). Testes B e M.
 
 **E se ficar tudo parado (ou o uso vier de outro dispositivo)?**
-Aí entra a API: 1 chamada a cada `API_TTL` (padrão 5min) por conta; todos os terminais
+Aí entra a API: 1 chamada a cada `API_TTL` (padrão 10min) por conta; todos os terminais
 da conta atualizam no tick seguinte ao fetch. Testes S e U.
 
 **Atualiza entre contas/perfis diferentes?**

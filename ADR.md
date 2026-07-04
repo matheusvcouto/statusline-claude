@@ -212,6 +212,24 @@ checagens. Gap anterior: nenhum cenário fazia o `resets_at` do cache divergir d
   mesmo snapshot não é confirmação nova. Depois desta revisão o fetch volta a confirmar
   de verdade em ociosidade.
 
+## Revisão 14 — `API_TTL` 300s → 600s (2026-07-04)
+
+Pedido do usuário: subir a frequência do fetch de ociosidade de 5min para **10min**.
+Racional: o stdin já mantém tudo fresco em uso ativo (zero chamadas) e qualquer
+interação zera o `↻` na hora; a API só cobre ociosidade real / uso em outro dispositivo,
+então um teto de 10min é suficiente. Mais conservador em chamadas e sem risco de rate
+limit — o endpoint é metadado (mesmo que o app chama no `/usage`, não passa pelo limite
+dos modelos); mesmo os 60s da revisão 10 (~1.440 GET/dia no pior caso) eram aceitos, e
+600s reduz o pior caso ocioso a ~144 GET/dia por conta.
+
+Único efeito colateral: quem **volta e só olha** (sem enviar nada) pode ver o `↻` subir
+até ~10min antes do próximo fetch (era ~5min). Enviar qualquer mensagem continua zerando
+na hora. `API_TTL` segue sendo o knob único no topo do bloco de fetch.
+
+Teste U ajustado: o `at` de ociosidade passou de `now-400` para `now-700` (precisa ser
+maior que o novo `API_TTL` para o cenário "ocioso ⇒ 1 chamada" continuar válido). 44
+checagens seguem verdes.
+
 ## Post-mortem — push ao GitHub antes da sanitização (2026-07-02)
 
 O repo foi publicado (privado) no GitHub **antes** da limpeza de dados pessoais: os

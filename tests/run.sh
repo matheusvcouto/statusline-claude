@@ -182,7 +182,7 @@ check "T active use makes 0 api calls" "calls=$( { wc -l < "$BASE/T.log" || echo
 # result is displayed on the next render; no re-call within the TTL.
 c=$(newcfg U)
 printf '%s' '{"claudeAiOauth":{"accessToken":"fake","expiresAt":9999999999999}}' > "$c/.credentials.json"
-printf '%s' '{"five":{"resets_at":"'"$R1"'","sessions":{"s1":{"pct":33,"at":'$(( now - 400 ))',"seen":'$(( now - 5 ))'}}},"week":{"resets_at":"'"$R2"'","sessions":{"s1":{"pct":10,"at":'$(( now - 400 ))',"seen":'$(( now - 5 ))'}}}}' > "$c/rate-limit-cache.json"
+printf '%s' '{"five":{"resets_at":"'"$R1"'","sessions":{"s1":{"pct":33,"at":'$(( now - 700 ))',"seen":'$(( now - 5 ))'}}},"week":{"resets_at":"'"$R2"'","sessions":{"s1":{"pct":10,"at":'$(( now - 700 ))',"seen":'$(( now - 5 ))'}}}}' > "$c/rate-limit-cache.json"
 render_counted "$c" "$(stdin_json s1 33 "$R1" 10 "$R2")" "$BASE/U.log" >/dev/null
 sleep 1
 check "U idle triggers exactly 1 api call" "calls=$(wc -l < "$BASE/U.log" | tr -d ' ')" '^calls=1$'
